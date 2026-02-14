@@ -1,4 +1,4 @@
-# DXFVue
+# DXFVue (Simple DXF viewer )
 
 This is a simple DXF viewer like the photos no spam of options etc.
 In reponse to resent DXF viewer app that spams and over kills the task.
