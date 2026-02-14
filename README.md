@@ -1,16 +1,19 @@
-# dxfvue
+# DXFVue
 
-A new Flutter project.
+This is a simple DXF viewer like the photos no spam of options etc.
+In reponse to resent DXF viewer app that spams and over kills the task.
 
-## Getting Started
+This app is made with flutter so from a single code base it can,
+build for windows linux ios and android.
 
-This project is a starting point for a Flutter application.
+Tasklist:
+GUI setup - done
+Open DXF and display DXF file - done
+add Layers Pane with on off function - done
+add fit to screen btn - Done
+add Reset btn - Done
+add color BG change btn - Done
+Add layers color option - Pending
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Regards
+Balachandran
