@@ -139,7 +139,13 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
                           fillOpacity: _fillOpacity,
                           invertColors: _invertColors,
                           onBackgroundColorChanged: (color) {
-                            setState(() => _backgroundColor = color);
+                            setState(() {
+                              _backgroundColor = color;
+                              // Auto-invert if background and drawing colors are similar
+                              if (_dxfData != null) {
+                                _autoDetectColorInversion(color);
+                              }
+                            });
                           },
                           onShowFillsChanged: (show) {
                             setState(() => _showFills = show);
@@ -250,6 +256,9 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
         _dxfData = data;
         _filename = filepath.split(Platform.pathSeparator).last;
       });
+      
+      // Auto-detect if color inversion is needed
+      _autoDetectColorInversion(_backgroundColor);
     } catch (e, stackTrace) {
       print('Error loading DXF: $e');
       print('Stack trace: $stackTrace');
@@ -263,6 +272,44 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
       _filename = null;
       _layersPanelCollapsed = false;
     });
+  }
+
+  void _autoDetectColorInversion(Color backgroundColor) {
+    if (_dxfData == null) return;
+    
+    // Get background luminance
+    final bgLum = backgroundColor.computeLuminance();
+    
+    // Check if most entities have similar luminance to background
+    int similarCount = 0;
+    int totalCount = 0;
+    
+    for (final entity in _dxfData!.entities) {
+      final entityLum = entity.color.computeLuminance();
+      final lumDiff = (bgLum - entityLum).abs();
+      
+      // If luminance difference is less than 0.3, they're too similar
+      if (lumDiff < 0.3) {
+        similarCount++;
+      }
+      totalCount++;
+      
+      // Sample first 100 entities for performance
+      if (totalCount >= 100) break;
+    }
+    
+    // If more than 50% of entities have similar luminance, auto-invert
+    if (totalCount > 0 && similarCount / totalCount > 0.5) {
+      setState(() {
+        _invertColors = true;
+      });
+      print('AUTO-INVERT: Enabled color inversion (${similarCount}/${totalCount} entities similar to background)');
+    } else {
+      setState(() {
+        _invertColors = false;
+      });
+      print('AUTO-INVERT: Disabled color inversion (only ${similarCount}/${totalCount} entities similar to background)');
+    }
   }
 
   void _showError(String message) {
@@ -372,7 +419,12 @@ class DXFParser {
                 'color': Colors.white,
                 'vertices': <Map<String, double>>[],
                 'points': <Map<String, double>>[],
+                'hatch_reading_vertices': false, // For HATCH: are we past the header?
+                'hatch_vertices_to_read': 0, // For HATCH: how many vertices to read
               };
+              if (entities.length < 5) {
+                print('DEBUG: Started parsing ${value} entity #${entities.length} at line $i');
+              }
             } else {
               currentEntity = null;
             }
@@ -394,10 +446,35 @@ class DXFParser {
                   case 10: // First corner X (or polyline vertex X)
                     if (currentEntity['type'] == 'SOLID') {
                       currentEntity['x1'] = double.tryParse(value) ?? 0.0;
+                    } else if (currentEntity['type'] == 'HATCH') {
+                      // For HATCH, only read vertices if we're in vertex reading mode
+                      if (currentEntity['hatch_reading_vertices'] == true) {
+                        final verticesRead = (currentEntity['vertices'] as List).length;
+                        final toRead = currentEntity['hatch_vertices_to_read'] as int;
+                        
+                        if (verticesRead < toRead) {
+                          final x = double.tryParse(value) ?? 0.0;
+                          currentEntity['last_x'] = x;
+                          final hatchNum = entities.where((e) => e.type == 'HATCH').length;
+                          if (hatchNum < 3 && verticesRead < 5) {
+                            print('DEBUG HATCH #$hatchNum: Reading vertex #${verticesRead + 1}/$toRead, X=$x');
+                          }
+                        }
+                      }
+                      // Ignore 10/20 pairs before code 93
                     } else if (currentEntity['type'] == 'LWPOLYLINE' || 
                         currentEntity['type'] == 'POLYLINE' ||
-                        currentEntity['type'] == 'HATCH') {
-                      currentEntity['last_x'] = double.tryParse(value) ?? 0.0;
+                        currentEntity['type'] == 'SPLINE') {
+                      final x = double.tryParse(value) ?? 0.0;
+                      currentEntity['last_x'] = x;
+                      
+                      if (currentEntity['type'] == 'SPLINE') {
+                        final splineNum = entities.where((e) => e.type == 'SPLINE').length;
+                        final pointsRead = (currentEntity['points'] as List).length;
+                        if (splineNum < 3 && pointsRead < 5) {
+                          print('DEBUG SPLINE #$splineNum: Reading point #${pointsRead + 1}, X=$x');
+                        }
+                      }
                     } else {
                       currentEntity['x'] = double.tryParse(value) ?? 0.0;
                     }
@@ -406,15 +483,45 @@ class DXFParser {
                   case 20: // First corner Y (or polyline vertex Y)
                     if (currentEntity['type'] == 'SOLID') {
                       currentEntity['y1'] = double.tryParse(value) ?? 0.0;
+                    } else if (currentEntity['type'] == 'HATCH') {
+                      if (currentEntity.containsKey('last_x') && 
+                          currentEntity['hatch_reading_vertices'] == true) {
+                        final vertices = currentEntity['vertices'] as List<Map<String, double>>;
+                        final toRead = currentEntity['hatch_vertices_to_read'] as int;
+                        
+                        if (vertices.length < toRead) {
+                          final y = double.tryParse(value) ?? 0.0;
+                          vertices.add({
+                            'x': currentEntity['last_x'] as double,
+                            'y': y,
+                          });
+                          final hatchNum = entities.where((e) => e.type == 'HATCH').length;
+                          if (hatchNum < 3 && vertices.length <= 5) {
+                            print('DEBUG HATCH #$hatchNum: Added vertex #${vertices.length}: x=${currentEntity['last_x']}, y=$y');
+                          }
+                          currentEntity.remove('last_x');
+                        }
+                      }
                     } else if (currentEntity['type'] == 'LWPOLYLINE' || 
                         currentEntity['type'] == 'POLYLINE' ||
-                        currentEntity['type'] == 'HATCH') {
+                        currentEntity['type'] == 'SPLINE') {
                       if (currentEntity.containsKey('last_x')) {
-                        final vertices = currentEntity['vertices'] as List<Map<String, double>>;
-                        vertices.add({
+                        final points = currentEntity['type'] == 'SPLINE' 
+                            ? currentEntity['points'] as List<Map<String, double>>
+                            : currentEntity['vertices'] as List<Map<String, double>>;
+                        final y = double.tryParse(value) ?? 0.0;
+                        points.add({
                           'x': currentEntity['last_x'] as double,
-                          'y': double.tryParse(value) ?? 0.0,
+                          'y': y,
                         });
+                        
+                        if (currentEntity['type'] == 'SPLINE') {
+                          final splineNum = entities.where((e) => e.type == 'SPLINE').length;
+                          if (splineNum < 3 && points.length <= 5) {
+                            print('DEBUG SPLINE #$splineNum: Added point #${points.length}: x=${currentEntity['last_x']}, y=$y');
+                          }
+                        }
+                        
                         currentEntity.remove('last_x');
                       }
                     } else {
@@ -483,6 +590,17 @@ class DXFParser {
                   case 90: // Vertex count
                     currentEntity['vertex_count'] = int.tryParse(value) ?? 0;
                     break;
+                  case 93: // HATCH: Number of boundary path edges/vertices
+                    if (currentEntity['type'] == 'HATCH') {
+                      final count = int.tryParse(value) ?? 0;
+                      currentEntity['hatch_vertices_to_read'] = count;
+                      currentEntity['hatch_reading_vertices'] = true;
+                      final hatchNum = entities.where((e) => e.type == 'HATCH').length;
+                      if (hatchNum < 3) {
+                        print('DEBUG HATCH #$hatchNum: Code 93 says $count vertices to read (line $i)');
+                      }
+                    }
+                    break;
                   case 1: // Text value
                     currentEntity['text'] = value;
                     break;
@@ -523,6 +641,34 @@ class DXFParser {
         entityCounts[entity.type] = (entityCounts[entity.type] ?? 0) + 1;
       }
       print('Entity breakdown: $entityCounts');
+      
+      // Print layer breakdown
+      print('\n=== LAYER STATUS ===');
+      for (final layer in layers.values) {
+        final layerEntities = entities.where((e) => e.layer == layer.name).length;
+        print('Layer "${layer.name}": ${layer.visible ? "VISIBLE" : "HIDDEN"}, $layerEntities entities');
+      }
+      
+      // Check if any entities have valid coordinates
+      int entitiesWithCoords = 0;
+      for (final entity in entities) {
+        if (entity.type == 'HATCH' || entity.type == 'LWPOLYLINE') {
+          final vertices = entity.data['vertices'] as List<Map<String, double>>?;
+          if (vertices != null && vertices.isNotEmpty) {
+            entitiesWithCoords++;
+            if (entitiesWithCoords == 1) {
+              print('\n=== FIRST ENTITY WITH COORDS ===');
+              print('Type: ${entity.type}');
+              print('Layer: ${entity.layer}');
+              print('Vertices: ${vertices.length}');
+              print('First vertex: ${vertices.first}');
+              print('Last vertex: ${vertices.last}');
+            }
+          }
+        }
+      }
+      print('Total entities with coordinates: $entitiesWithCoords');
+      print('==================\n');
 
       return DXFData(
         entities: entities,
@@ -583,12 +729,48 @@ class DXFParser {
           data.containsKey('vertices')) {
         final vertices = data['vertices'] as List<Map<String, double>>;
         if (vertices.length >= 2) {
+          if (entities.length < 5) {  // Debug first few entities
+            print('DEBUG: Adding $type entity #${entities.length}');
+            print('  Layer: $layer');
+            print('  Vertices: ${vertices.length}');
+            if (vertices.isNotEmpty) {
+              print('  First vertex: ${vertices.first}');
+              print('  Last vertex: ${vertices.last}');
+            }
+          }
           entities.add(DXFEntity(
             type: type,
             layer: layer,
             color: color,
             data: data,
           ));
+        } else {
+          if (entities.length < 5) {
+            print('WARNING: Skipping $type #${entities.length} - only ${vertices.length} vertices (need >=2)');
+          }
+        }
+      } else if (type == 'SPLINE' && data.containsKey('points')) {
+        final points = data['points'] as List<Map<String, double>>;
+        if (points.length >= 2) {
+          if (entities.length < 5) {
+            print('DEBUG: Adding SPLINE entity #${entities.length}');
+            print('  Layer: $layer');
+            print('  Control points: ${points.length}');
+            if (points.isNotEmpty) {
+              print('  First point: ${points.first}');
+              print('  Last point: ${points.last}');
+            }
+          }
+          entities.add(DXFEntity(
+            type: type,
+            layer: layer,
+            color: color,
+            data: data,
+          ));
+        } else {
+          if (entities.length < 5) {
+            print('WARNING: Skipping SPLINE #${entities.length} - only ${points.length} points (need >=2)');
+          }
         }
       } else if (type == 'SOLID') {
         if (data.containsKey('x1') && data.containsKey('y1') &&
@@ -616,12 +798,26 @@ class DXFParser {
           data.containsKey('vertices')) {
         final vertices = data['vertices'] as List<Map<String, double>>;
         if (vertices.isNotEmpty) {
+          if (entities.length < 5) {  // Debug first few entities
+            print('DEBUG: Adding HATCH entity #${entities.length}');
+            print('  Layer: $layer');
+            print('  Color: $color');
+            print('  Vertices: ${vertices.length}');
+            if (vertices.isNotEmpty) {
+              print('  First vertex: ${vertices.first}');
+              print('  Last vertex: ${vertices.last}');
+            }
+          }
           entities.add(DXFEntity(
             type: type,
             layer: layer,
             color: color,
             data: data,
           ));
+        } else {
+          if (entities.length < 5) {
+            print('WARNING: Skipping HATCH #${entities.length} - no vertices (vertices list empty)');
+          }
         }
       } else if (type == 'ELLIPSE' &&
           data.containsKey('x') &&
@@ -667,6 +863,7 @@ class DXFParser {
 
   Rect _calculateBounds(List<DXFEntity> entities) {
     if (entities.isEmpty) {
+      print('WARNING: No entities for bounds calculation');
       return const Rect.fromLTRB(0, 0, 100, 100);
     }
 
@@ -674,6 +871,8 @@ class DXFParser {
     double minY = double.infinity;
     double maxX = double.negativeInfinity;
     double maxY = double.negativeInfinity;
+    
+    int boundedCount = 0;
 
     for (final entity in entities) {
       try {
@@ -684,12 +883,14 @@ class DXFParser {
           maxX = math.max(maxX, math.max(data['x'], data['x2']));
           minY = math.min(minY, math.min(data['y'], data['y2']));
           maxY = math.max(maxY, math.max(data['y'], data['y2']));
+          boundedCount++;
         } else if (entity.type == 'CIRCLE' || entity.type == 'ARC') {
           final r = data['radius'];
           minX = math.min(minX, data['x'] - r);
           maxX = math.max(maxX, data['x'] + r);
           minY = math.min(minY, data['y'] - r);
           maxY = math.max(maxY, data['y'] + r);
+          boundedCount++;
         } else if (entity.type == 'LWPOLYLINE' || 
                    entity.type == 'POLYLINE' || 
                    entity.type == 'HATCH' ||
@@ -703,6 +904,18 @@ class DXFParser {
             minY = math.min(minY, y);
             maxY = math.max(maxY, y);
           }
+          if (vertices.isNotEmpty) boundedCount++;
+        } else if (entity.type == 'SPLINE') {
+          final points = data['points'] as List<Map<String, double>>? ?? [];
+          for (final point in points) {
+            final x = point['x']!;
+            final y = point['y']!;
+            minX = math.min(minX, x);
+            maxX = math.max(maxX, x);
+            minY = math.min(minY, y);
+            maxY = math.max(maxY, y);
+          }
+          if (points.isNotEmpty) boundedCount++;
         } else if (entity.type == 'ELLIPSE') {
           final cx = data['x'];
           final cy = data['y'];
@@ -713,18 +926,24 @@ class DXFParser {
           maxX = math.max(maxX, cx + majorRadius);
           minY = math.min(minY, cy - majorRadius);
           maxY = math.max(maxY, cy + majorRadius);
+          boundedCount++;
         } else if (entity.type == 'POINT') {
           minX = math.min(minX, data['x']);
           maxX = math.max(maxX, data['x']);
           minY = math.min(minY, data['y']);
           maxY = math.max(maxY, data['y']);
+          boundedCount++;
         }
       } catch (e) {
         print('WARNING: Error calculating bounds for entity ${entity.type}: $e');
       }
     }
+    
+    print('Bounded $boundedCount/${entities.length} entities');
+    print('Raw bounds: minX=$minX, minY=$minY, maxX=$maxX, maxY=$maxY');
 
     if (minX == double.infinity || maxX == double.negativeInfinity) {
+      print('ERROR: Invalid bounds, using default');
       return const Rect.fromLTRB(0, 0, 100, 100);
     }
 
@@ -875,58 +1094,74 @@ class _DXFCanvasState extends State<DXFCanvas> {
   }
 
   void _showFillSettings() {
+    // Create local copies of current values
+    bool localShowFills = widget.showFills;
+    bool localInvertColors = widget.invertColors;
+    double localFillOpacity = widget.fillOpacity;
+    
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2b2b2b),
-        title: Text(
-          'Display Settings',
-          style: TextStyle(color: Colors.grey.shade300),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SwitchListTile(
-              title: const Text('Show Fills'),
-              subtitle: const Text('Toggle HATCH/SOLID entities'),
-              value: widget.showFills,
-              onChanged: (value) {
-                widget.onShowFillsChanged(value);
-              },
-            ),
-            const SizedBox(height: 8),
-            SwitchListTile(
-              title: const Text('Invert Colors'),
-              subtitle: const Text('Better visibility for light colors'),
-              value: widget.invertColors,
-              onChanged: (value) {
-                widget.onInvertColorsChanged(value);
-              },
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Fill Opacity: ${(widget.fillOpacity * 100).toInt()}%',
-              style: TextStyle(color: Colors.grey.shade300),
-            ),
-            Slider(
-              value: widget.fillOpacity,
-              min: 0.0,
-              max: 1.0,
-              divisions: 20,
-              label: '${(widget.fillOpacity * 100).toInt()}%',
-              onChanged: (value) {
-                widget.onFillOpacityChanged(value);
-              },
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xFF2b2b2b),
+          title: Text(
+            'Display Settings',
+            style: TextStyle(color: Colors.grey.shade300),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SwitchListTile(
+                title: const Text('Show Fills'),
+                subtitle: const Text('Toggle HATCH/SOLID entities'),
+                value: localShowFills,
+                onChanged: (value) {
+                  setDialogState(() {
+                    localShowFills = value;
+                  });
+                  widget.onShowFillsChanged(value);
+                },
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                title: const Text('Invert Colors'),
+                subtitle: const Text('Better visibility for light colors'),
+                value: localInvertColors,
+                onChanged: (value) {
+                  setDialogState(() {
+                    localInvertColors = value;
+                  });
+                  widget.onInvertColorsChanged(value);
+                },
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Fill Opacity: ${(localFillOpacity * 100).toInt()}%',
+                style: TextStyle(color: Colors.grey.shade300),
+              ),
+              Slider(
+                value: localFillOpacity,
+                min: 0.0,
+                max: 1.0,
+                divisions: 20,
+                label: '${(localFillOpacity * 100).toInt()}%',
+                onChanged: (value) {
+                  setDialogState(() {
+                    localFillOpacity = value;
+                  });
+                  widget.onFillOpacityChanged(value);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
       ),
     );
   }
@@ -998,6 +1233,41 @@ class _DXFCanvasState extends State<DXFCanvas> {
               left: 16,
               child: Row(
                 children: [
+                  Material(
+                    elevation: 4,
+                    borderRadius: BorderRadius.circular(4),
+                    color: const Color(0xFF3c3c3c),
+                    child: InkWell(
+                      onTap: () {
+                        // Force show fills for debugging
+                        widget.onShowFillsChanged(true);
+                        print('DEBUG: Forced fills ON');
+                      },
+                      borderRadius: BorderRadius.circular(4),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.bug_report, size: 18, color: Colors.orange),
+                            const SizedBox(width: 6),
+                            Text(
+                              'DEBUG',
+                              style: TextStyle(
+                                color: Colors.orange,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
                   Material(
                     elevation: 4,
                     borderRadius: BorderRadius.circular(4),
@@ -1166,19 +1436,50 @@ class DXFPainter extends CustomPainter {
     final dxfWidth = bounds.width;
     final dxfHeight = bounds.height;
 
-    if (dxfWidth == 0 || dxfHeight == 0) return;
+    print('=== PAINT DEBUG ===');
+    print('Canvas size: ${size.width} x ${size.height}');
+    print('DXF bounds: $bounds');
+    print('DXF size: $dxfWidth x $dxfHeight');
+    print('Total entities: ${dxfData.entities.length}');
+    print('Total layers: ${dxfData.layers.length}');
+    
+    // Count visible entities
+    int visibleCount = 0;
+    for (final entity in dxfData.entities) {
+      final layer = dxfData.layers[entity.layer];
+      if (layer != null && layer.visible) visibleCount++;
+    }
+    print('Visible entities: $visibleCount');
+
+    if (dxfWidth == 0 || dxfHeight == 0) {
+      print('ERROR: Invalid DXF dimensions, cannot render');
+      // Draw error indicator
+      final paint = Paint()
+        ..color = Colors.red
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2;
+      canvas.drawRect(Rect.fromLTWH(10, 10, size.width - 20, size.height - 20), paint);
+      canvas.drawLine(Offset(10, 10), Offset(size.width - 10, size.height - 10), paint);
+      canvas.drawLine(Offset(size.width - 10, 10), Offset(10, size.height - 10), paint);
+      return;
+    }
 
     // Calculate base scale to fit
     final scaleX = (size.width * 0.9) / dxfWidth;
     final scaleY = (size.height * 0.9) / dxfHeight;
     final baseScale = math.min(scaleX, scaleY);
     final totalScale = baseScale * scale;
+    
+    print('Scale: base=$baseScale, user=$scale, total=$totalScale');
 
     // Calculate center
     final centerX = size.width / 2;
     final centerY = size.height / 2;
     final dxfCenterX = (bounds.left + bounds.right) / 2;
     final dxfCenterY = (bounds.top + bounds.bottom) / 2;
+    
+    print('Centers: canvas=($centerX, $centerY), dxf=($dxfCenterX, $dxfCenterY)');
+    print('==================');
 
     // CRITICAL FIX: Render in two passes
     // Pass 1: Filled entities (background) - only if showFills is true
@@ -1265,6 +1566,29 @@ class DXFPainter extends CustomPainter {
         canvas.drawPath(path, paint);
       } catch (e) {
         print('WARNING: Error rendering polyline: $e');
+      }
+    } else if (entity.type == 'SPLINE') {
+      try {
+        final points = data['points'] as List<Map<String, double>>? ?? [];
+        if (points.length < 2) return;
+
+        final path = Path();
+        final firstPoint = points[0];
+        final x = (firstPoint['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
+        final y = -(firstPoint['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
+        path.moveTo(x, y);
+
+        // Draw SPLINE as connected line segments through control points
+        for (int i = 1; i < points.length; i++) {
+          final point = points[i];
+          final px = (point['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
+          final py = -(point['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
+          path.lineTo(px, py);
+        }
+
+        canvas.drawPath(path, paint);
+      } catch (e) {
+        print('WARNING: Error rendering SPLINE: $e');
       }
     } else if ((entity.type == 'HATCH' || entity.type == 'SOLID') && isFillPass) {
       try {
