@@ -9,12 +9,15 @@ import 'package:file_picker/file_picker.dart';
 
 
 
-void main() {
-  runApp(const DXFViewerApp());
+void main(List<String> args) {
+  String? initialFilePath = args.isNotEmpty ? args[0] : null;
+  runApp(DXFViewerApp(initialFile: initialFilePath));
 }
 
 class DXFViewerApp extends StatelessWidget {
-  const DXFViewerApp({Key? key}) : super(key: key);
+  final String? initialFile;
+  
+  const DXFViewerApp({super.key, this.initialFile});
 
   @override
   Widget build(BuildContext context) {
@@ -26,13 +29,14 @@ class DXFViewerApp extends StatelessWidget {
         primaryColor: const Color(0xFF2b2b2b),
         cardColor: const Color(0xFF2b2b2b),
       ),
-      home: const DXFViewerHome(),
+      home: DXFViewerHome(externalFile: initialFile),
     );
   }
 }
 
 class DXFViewerHome extends StatefulWidget {
-  const DXFViewerHome({Key? key}) : super(key: key);
+  final String? externalFile;
+  const DXFViewerHome({super.key, this.externalFile});
 
   @override
   State<DXFViewerHome> createState() => _DXFViewerHomeState();
@@ -43,7 +47,20 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
   String? _filename;
   bool _isDragging = false;
   bool _layersPanelCollapsed = false;
+  bool _showFills = false; // NEW: Toggle for filled entities (default OFF)
+  double _fillOpacity = 0.3; // NEW: Adjustable fill opacity
+  bool _invertColors = false; // NEW: Invert colors for visibility
   Color _backgroundColor = const Color(0xFF2b2b2b);
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.externalFile != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _loadFile(widget.externalFile!);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,7 +96,6 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
         },
         child: Row(
           children: [
-            // Main canvas area
             Expanded(
               child: MouseRegion(
                 cursor: _isDragging ? SystemMouseCursors.copy : SystemMouseCursors.basic,
@@ -119,15 +135,26 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
                       : DXFCanvas(
                           dxfData: _dxfData!,
                           backgroundColor: _backgroundColor,
+                          showFills: _showFills,
+                          fillOpacity: _fillOpacity,
+                          invertColors: _invertColors,
                           onBackgroundColorChanged: (color) {
                             setState(() => _backgroundColor = color);
+                          },
+                          onShowFillsChanged: (show) {
+                            setState(() => _showFills = show);
+                          },
+                          onFillOpacityChanged: (opacity) {
+                            setState(() => _fillOpacity = opacity);
+                          },
+                          onInvertColorsChanged: (invert) {
+                            setState(() => _invertColors = invert);
                           },
                           onReset: _resetView,
                         ),
                 ),
               ),
             ),
-            // Layer panel with collapse button
             if (_dxfData != null)
               AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
@@ -150,7 +177,6 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
                       )
                     : Column(
                         children: [
-                          // Layers header with collapse button
                           Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 16,
@@ -316,12 +342,11 @@ class DXFParser {
         );
       }
 
-      // Parse entities - start right after ENTITIES line
+      // Parse entities
       int i = entitiesStart + 1;
       Map<String, dynamic>? currentEntity;
 
       print('DEBUG: Starting entity parsing at line $i');
-      print('DEBUG: First few lines: ${lines.sublist(i, math.min(i + 10, lines.length))}');
 
       while (i < lines.length - 1) {
         try {
@@ -365,21 +390,25 @@ class DXFParser {
                       );
                     }
                     break;
-                  case 10: // X coordinate (or first X for polyline vertex)
-                    if (currentEntity['type'] == 'LWPOLYLINE' || 
+                    
+                  case 10: // First corner X (or polyline vertex X)
+                    if (currentEntity['type'] == 'SOLID') {
+                      currentEntity['x1'] = double.tryParse(value) ?? 0.0;
+                    } else if (currentEntity['type'] == 'LWPOLYLINE' || 
                         currentEntity['type'] == 'POLYLINE' ||
                         currentEntity['type'] == 'HATCH') {
-                      // Add to vertices list
                       currentEntity['last_x'] = double.tryParse(value) ?? 0.0;
                     } else {
                       currentEntity['x'] = double.tryParse(value) ?? 0.0;
                     }
                     break;
-                  case 20: // Y coordinate (or first Y for polyline vertex)
-                    if (currentEntity['type'] == 'LWPOLYLINE' || 
+                    
+                  case 20: // First corner Y (or polyline vertex Y)
+                    if (currentEntity['type'] == 'SOLID') {
+                      currentEntity['y1'] = double.tryParse(value) ?? 0.0;
+                    } else if (currentEntity['type'] == 'LWPOLYLINE' || 
                         currentEntity['type'] == 'POLYLINE' ||
                         currentEntity['type'] == 'HATCH') {
-                      // Complete the vertex and add it
                       if (currentEntity.containsKey('last_x')) {
                         final vertices = currentEntity['vertices'] as List<Map<String, double>>;
                         vertices.add({
@@ -392,12 +421,39 @@ class DXFParser {
                       currentEntity['y'] = double.tryParse(value) ?? 0.0;
                     }
                     break;
-                  case 11: // X2 coordinate / major axis endpoint X
-                    currentEntity['x2'] = double.tryParse(value) ?? 0.0;
+                    
+                  case 11: // Second corner X (or major axis endpoint X)
+                    if (currentEntity['type'] == 'SOLID') {
+                      currentEntity['x2'] = double.tryParse(value) ?? 0.0;
+                    } else {
+                      currentEntity['x2'] = double.tryParse(value) ?? 0.0;
+                    }
                     break;
-                  case 21: // Y2 coordinate / major axis endpoint Y
-                    currentEntity['y2'] = double.tryParse(value) ?? 0.0;
+                    
+                  case 21: // Second corner Y (or major axis endpoint Y)
+                    if (currentEntity['type'] == 'SOLID') {
+                      currentEntity['y2'] = double.tryParse(value) ?? 0.0;
+                    } else {
+                      currentEntity['y2'] = double.tryParse(value) ?? 0.0;
+                    }
                     break;
+                    
+                  case 12: // Third corner X
+                    currentEntity['x3'] = double.tryParse(value) ?? 0.0;
+                    break;
+                    
+                  case 22: // Third corner Y
+                    currentEntity['y3'] = double.tryParse(value) ?? 0.0;
+                    break;
+                    
+                  case 13: // Fourth corner X
+                    currentEntity['x4'] = double.tryParse(value) ?? 0.0;
+                    break;
+                    
+                  case 23: // Fourth corner Y
+                    currentEntity['y4'] = double.tryParse(value) ?? 0.0;
+                    break;
+                    
                   case 40: // Radius / minor to major ratio
                     currentEntity['radius'] = double.tryParse(value) ?? 0.0;
                     break;
@@ -413,8 +469,13 @@ class DXFParser {
                   case 51: // End angle
                     currentEntity['end_angle'] = double.tryParse(value) ?? 0.0;
                     break;
-                  case 62: // Color
+                  case 62: // Color (ACI)
                     currentEntity['color'] = _aciToColor(int.tryParse(value) ?? 7);
+                    break;
+                  case 420: // RGB color (24-bit)
+                  case 421: // RGB color (24-bit)  
+                    final rgb = int.tryParse(value) ?? 16777215;
+                    currentEntity['color'] = Color(0xFF000000 | rgb);
                     break;
                   case 70: // Flags (closed polyline, etc)
                     currentEntity['flags'] = int.tryParse(value) ?? 0;
@@ -454,6 +515,14 @@ class DXFParser {
       final bounds = _calculateBounds(entities);
 
       print('Successfully parsed ${entities.length} entities from ${layers.length} layers');
+      print('Final bounds: $bounds');
+      
+      // Print entity type breakdown
+      final entityCounts = <String, int>{};
+      for (final entity in entities) {
+        entityCounts[entity.type] = (entityCounts[entity.type] ?? 0) + 1;
+      }
+      print('Entity breakdown: $entityCounts');
 
       return DXFData(
         entities: entities,
@@ -521,10 +590,21 @@ class DXFParser {
             data: data,
           ));
         }
-      } else if (type == 'SOLID' &&
-          data.containsKey('vertices')) {
-        final vertices = data['vertices'] as List<Map<String, double>>;
-        if (vertices.length >= 3) {
+      } else if (type == 'SOLID') {
+        if (data.containsKey('x1') && data.containsKey('y1') &&
+            data.containsKey('x2') && data.containsKey('y2') &&
+            data.containsKey('x3') && data.containsKey('y3')) {
+          // Convert SOLID corners to vertices
+          final vertices = <Map<String, double>>[
+            {'x': data['x1'], 'y': data['y1']},
+            {'x': data['x2'], 'y': data['y2']},
+            {'x': data['x3'], 'y': data['y3']},
+          ];
+          if (data.containsKey('x4') && data.containsKey('y4')) {
+            vertices.add({'x': data['x4'], 'y': data['y4']});
+          }
+          data['vertices'] = vertices;
+          
           entities.add(DXFEntity(
             type: type,
             layer: layer,
@@ -548,6 +628,15 @@ class DXFParser {
           data.containsKey('y') &&
           data.containsKey('x2') &&
           data.containsKey('y2')) {
+        entities.add(DXFEntity(
+          type: type,
+          layer: layer,
+          color: color,
+          data: data,
+        ));
+      } else if (type == 'POINT' &&
+          data.containsKey('x') &&
+          data.containsKey('y')) {
         entities.add(DXFEntity(
           type: type,
           layer: layer,
@@ -615,7 +704,6 @@ class DXFParser {
             maxY = math.max(maxY, y);
           }
         } else if (entity.type == 'ELLIPSE') {
-          // Approximate ellipse bounds
           final cx = data['x'];
           final cy = data['y'];
           final majorX = data['x2'];
@@ -625,13 +713,17 @@ class DXFParser {
           maxX = math.max(maxX, cx + majorRadius);
           minY = math.min(minY, cy - majorRadius);
           maxY = math.max(maxY, cy + majorRadius);
+        } else if (entity.type == 'POINT') {
+          minX = math.min(minX, data['x']);
+          maxX = math.max(maxX, data['x']);
+          minY = math.min(minY, data['y']);
+          maxY = math.max(maxY, data['y']);
         }
       } catch (e) {
         print('WARNING: Error calculating bounds for entity ${entity.type}: $e');
       }
     }
 
-    // Fallback if no valid bounds found
     if (minX == double.infinity || maxX == double.negativeInfinity) {
       return const Rect.fromLTRB(0, 0, 100, 100);
     }
@@ -655,14 +747,26 @@ class DXFParser {
 class DXFCanvas extends StatefulWidget {
   final DXFData dxfData;
   final Color backgroundColor;
+  final bool showFills;
+  final double fillOpacity;
+  final bool invertColors;
   final Function(Color) onBackgroundColorChanged;
+  final Function(bool) onShowFillsChanged;
+  final Function(double) onFillOpacityChanged;
+  final Function(bool) onInvertColorsChanged;
   final VoidCallback onReset;
 
   const DXFCanvas({
     Key? key,
     required this.dxfData,
     required this.backgroundColor,
+    required this.showFills,
+    required this.fillOpacity,
+    required this.invertColors,
     required this.onBackgroundColorChanged,
+    required this.onShowFillsChanged,
+    required this.onFillOpacityChanged,
+    required this.onInvertColorsChanged,
     required this.onReset,
   }) : super(key: key);
 
@@ -680,6 +784,9 @@ class _DXFCanvasState extends State<DXFCanvas> {
   void initState() {
     super.initState();
     _focusNode.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoFitView();
+    });
   }
 
   @override
@@ -688,25 +795,45 @@ class _DXFCanvasState extends State<DXFCanvas> {
     super.dispose();
   }
 
+  void _autoFitView() {
+    final RenderBox? renderBox = context.findRenderObject() as RenderBox?;
+    if (renderBox != null) {
+      final size = renderBox.size;
+      _fitView(size);
+    }
+  }
+
   void _fitView(Size size) {
     setState(() {
-      _offset = Offset.zero;
+      final bounds = widget.dxfData.bounds;
+      final dxfWidth = bounds.width;
+      final dxfHeight = bounds.height;
+
+      if (dxfWidth == 0 || dxfHeight == 0) {
+        _offset = Offset.zero;
+        _scale = 1.0;
+        return;
+      }
+
       _scale = 1.0;
+      _offset = Offset.zero;
+      
+      print('Fit view: canvas=${size.width}x${size.height}, bounds=${dxfWidth}x${dxfHeight}');
     });
   }
 
   void _showBackgroundColorPicker() {
     final colors = [
-      const Color(0xFF000000), // Black
-      const Color(0xFF1a1a1a), // Very Dark Gray
-      const Color(0xFF2b2b2b), // Dark Gray (default)
-      const Color(0xFF404040), // Medium Dark Gray
-      const Color(0xFF1e3a4f), // Dark Blue
-      const Color(0xFF2d4a5c), // Medium Dark Blue
-      const Color(0xFF4a90c4), // Light Blue
-      const Color(0xFF808080), // Medium Gray
-      const Color(0xFFc0c0c0), // Light Gray
-      const Color(0xFFffffff), // White
+      const Color(0xFF000000),
+      const Color(0xFF1a1a1a),
+      const Color(0xFF2b2b2b),
+      const Color(0xFF404040),
+      const Color(0xFF1e3a4f),
+      const Color(0xFF2d4a5c),
+      const Color(0xFF4a90c4),
+      const Color(0xFF808080),
+      const Color(0xFFc0c0c0),
+      const Color(0xFFffffff),
     ];
 
     showDialog(
@@ -747,18 +874,73 @@ class _DXFCanvasState extends State<DXFCanvas> {
     );
   }
 
+  void _showFillSettings() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2b2b2b),
+        title: Text(
+          'Display Settings',
+          style: TextStyle(color: Colors.grey.shade300),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SwitchListTile(
+              title: const Text('Show Fills'),
+              subtitle: const Text('Toggle HATCH/SOLID entities'),
+              value: widget.showFills,
+              onChanged: (value) {
+                widget.onShowFillsChanged(value);
+              },
+            ),
+            const SizedBox(height: 8),
+            SwitchListTile(
+              title: const Text('Invert Colors'),
+              subtitle: const Text('Better visibility for light colors'),
+              value: widget.invertColors,
+              onChanged: (value) {
+                widget.onInvertColorsChanged(value);
+              },
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Fill Opacity: ${(widget.fillOpacity * 100).toInt()}%',
+              style: TextStyle(color: Colors.grey.shade300),
+            ),
+            Slider(
+              value: widget.fillOpacity,
+              min: 0.0,
+              max: 1.0,
+              divisions: 20,
+              label: '${(widget.fillOpacity * 100).toInt()}%',
+              onChanged: (value) {
+                widget.onFillOpacityChanged(value);
+              },
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
         return Stack(
           children: [
-            // Canvas
             Listener(
               onPointerSignal: (event) {
                 if (event is PointerScrollEvent) {
                   setState(() {
-                    // Zoom with mouse wheel
                     final delta = event.scrollDelta.dy;
                     final zoomFactor = delta > 0 ? 0.9 : 1.1;
                     _scale = (_scale * zoomFactor).clamp(0.1, 10.0);
@@ -786,10 +968,8 @@ class _DXFCanvasState extends State<DXFCanvas> {
                   },
                   onScaleUpdate: (details) {
                     setState(() {
-                      // Handle zoom
                       _scale = (_scale * details.scale).clamp(0.1, 10.0);
 
-                      // Handle pan
                       if (_lastFocalPoint != null) {
                         _offset += details.focalPoint - _lastFocalPoint!;
                       }
@@ -804,19 +984,20 @@ class _DXFCanvasState extends State<DXFCanvas> {
                       dxfData: widget.dxfData,
                       offset: _offset,
                       scale: _scale,
+                      showFills: widget.showFills,
+                      fillOpacity: widget.fillOpacity,
+                      invertColors: widget.invertColors,
                     ),
                     child: Container(color: Colors.transparent),
                   ),
                 ),
               ),
             ),
-            // Control Buttons
             Positioned(
               top: 16,
               left: 16,
               child: Row(
                 children: [
-                  // Reset Button
                   Material(
                     elevation: 4,
                     borderRadius: BorderRadius.circular(4),
@@ -847,7 +1028,6 @@ class _DXFCanvasState extends State<DXFCanvas> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // Fit View Button
                   Material(
                     elevation: 4,
                     borderRadius: BorderRadius.circular(4),
@@ -878,7 +1058,6 @@ class _DXFCanvasState extends State<DXFCanvas> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  // Background Color Picker
                   Material(
                     elevation: 4,
                     borderRadius: BorderRadius.circular(4),
@@ -907,6 +1086,40 @@ class _DXFCanvasState extends State<DXFCanvas> {
                       ),
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  Material(
+                    elevation: 4,
+                    borderRadius: BorderRadius.circular(4),
+                    color: const Color(0xFF3c3c3c),
+                    child: InkWell(
+                      onTap: _showFillSettings,
+                      borderRadius: BorderRadius.circular(4),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              widget.showFills ? Icons.format_color_fill : Icons.format_color_reset,
+                              size: 20,
+                              color: Colors.grey.shade300,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Fills',
+                              style: TextStyle(
+                                color: Colors.grey.shade300,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -922,12 +1135,30 @@ class DXFPainter extends CustomPainter {
   final DXFData dxfData;
   final Offset offset;
   final double scale;
+  final bool showFills;
+  final double fillOpacity;
+  final bool invertColors;
 
   DXFPainter({
     required this.dxfData,
     required this.offset,
     required this.scale,
+    required this.showFills,
+    required this.fillOpacity,
+    required this.invertColors,
   });
+
+  Color _processColor(Color original) {
+    if (!invertColors) return original;
+    
+    // Invert RGB but keep alpha
+    return Color.fromARGB(
+      original.alpha,
+      255 - original.red,
+      255 - original.green,
+      255 - original.blue,
+    );
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -941,8 +1172,6 @@ class DXFPainter extends CustomPainter {
     final scaleX = (size.width * 0.9) / dxfWidth;
     final scaleY = (size.height * 0.9) / dxfHeight;
     final baseScale = math.min(scaleX, scaleY);
-
-    // Apply zoom
     final totalScale = baseScale * scale;
 
     // Calculate center
@@ -951,135 +1180,134 @@ class DXFPainter extends CustomPainter {
     final dxfCenterX = (bounds.left + bounds.right) / 2;
     final dxfCenterY = (bounds.top + bounds.bottom) / 2;
 
-    // Render entities
+    // CRITICAL FIX: Render in two passes
+    // Pass 1: Filled entities (background) - only if showFills is true
+    if (showFills) {
+      for (final entity in dxfData.entities) {
+        final layer = dxfData.layers[entity.layer];
+        if (layer == null || !layer.visible) continue;
+        
+        if (entity.type == 'HATCH' || entity.type == 'SOLID') {
+          _renderEntity(canvas, entity, totalScale, centerX, centerY, dxfCenterX, dxfCenterY, true);
+        }
+      }
+    }
+    
+    // Pass 2: Outline entities (foreground)
     for (final entity in dxfData.entities) {
       final layer = dxfData.layers[entity.layer];
       if (layer == null || !layer.visible) continue;
-
-      final paint = Paint()
-        ..color = entity.color
-        ..strokeWidth = 1.0
-        ..style = PaintingStyle.stroke;
-
-      final data = entity.data;
-
-      if (entity.type == 'LINE') {
-        final x1 = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
-        final y1 =
-            -(data['y'] - dxfCenterY) * totalScale + centerY + offset.dy;
-        final x2 = (data['x2'] - dxfCenterX) * totalScale + centerX + offset.dx;
-        final y2 =
-            -(data['y2'] - dxfCenterY) * totalScale + centerY + offset.dy;
-
-        canvas.drawLine(Offset(x1, y1), Offset(x2, y2), paint);
-      } else if (entity.type == 'CIRCLE') {
-        final cx = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
-        final cy = -(data['y'] - dxfCenterY) * totalScale + centerY + offset.dy;
-        final r = data['radius'] * totalScale;
-
-        canvas.drawCircle(Offset(cx, cy), r, paint);
-      } else if (entity.type == 'ARC') {
-        final cx = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
-        final cy = -(data['y'] - dxfCenterY) * totalScale + centerY + offset.dy;
-        final r = data['radius'] * totalScale;
-
-        final startAngle = -data['end_angle'] * math.pi / 180;
-        final sweepAngle =
-            -(data['start_angle'] - data['end_angle']) * math.pi / 180;
-
-        final rect = Rect.fromCircle(center: Offset(cx, cy), radius: r);
-        canvas.drawArc(rect, startAngle, sweepAngle, false, paint);
-      } else if (entity.type == 'LWPOLYLINE' || entity.type == 'POLYLINE') {
-        try {
-          final vertices = data['vertices'] as List<Map<String, double>>;
-          if (vertices.length < 2) continue;
-
-          final path = Path();
-          final firstVertex = vertices[0];
-          final x = (firstVertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
-          final y = -(firstVertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
-          path.moveTo(x, y);
-
-          for (int i = 1; i < vertices.length; i++) {
-            final vertex = vertices[i];
-            final vx = (vertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
-            final vy = -(vertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
-            path.lineTo(vx, vy);
-          }
-
-          // Check if closed
-          final flags = data['flags'] as int? ?? 0;
-          if (flags & 1 == 1) {
-            path.close();
-          }
-
-          canvas.drawPath(path, paint);
-        } catch (e) {
-          print('WARNING: Error rendering polyline: $e');
-        }
-      } else if (entity.type == 'HATCH') {
-        try {
-          final vertices = data['vertices'] as List<Map<String, double>>;
-          if (vertices.isEmpty) continue;
-
-          final path = Path();
-          final firstVertex = vertices[0];
-          final x = (firstVertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
-          final y = -(firstVertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
-          path.moveTo(x, y);
-
-          for (int i = 1; i < vertices.length; i++) {
-            final vertex = vertices[i];
-            final vx = (vertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
-            final vy = -(vertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
-            path.lineTo(vx, vy);
-          }
-
-          path.close();
-          paint.style = PaintingStyle.fill;
-          canvas.drawPath(path, paint);
-        } catch (e) {
-          print('WARNING: Error rendering hatch: $e');
-        }
-      } else if (entity.type == 'SOLID') {
-        try {
-          final vertices = data['vertices'] as List<Map<String, double>>;
-          if (vertices.length < 3) continue;
-
-          final path = Path();
-          final firstVertex = vertices[0];
-          final x = (firstVertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
-          final y = -(firstVertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
-          path.moveTo(x, y);
-
-          for (int i = 1; i < vertices.length; i++) {
-            final vertex = vertices[i];
-            final vx = (vertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
-            final vy = -(vertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
-            path.lineTo(vx, vy);
-          }
-
-          path.close();
-          paint.style = PaintingStyle.fill;
-          canvas.drawPath(path, paint);
-        } catch (e) {
-          print('WARNING: Error rendering solid: $e');
-        }
-      } else if (entity.type == 'ELLIPSE') {
-        final cx = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
-        final cy = -(data['y'] - dxfCenterY) * totalScale + centerY + offset.dy;
-        final majorX = data['x2'] * totalScale;
-        final majorY = -data['y2'] * totalScale;
-        final majorRadius = math.sqrt(majorX * majorX + majorY * majorY);
-        final minorRadius = majorRadius * (data['radius'] ?? 1.0);
-
-        final rect = Rect.fromCenter(
-          center: Offset(cx, cy),
-          width: majorRadius * 2,
-          height: minorRadius * 2,
-        );
-        canvas.drawOval(rect, paint);
+      
+      if (entity.type != 'HATCH' && entity.type != 'SOLID') {
+        _renderEntity(canvas, entity, totalScale, centerX, centerY, dxfCenterX, dxfCenterY, false);
       }
+    }
+  }
+
+  void _renderEntity(Canvas canvas, DXFEntity entity, double totalScale,
+      double centerX, double centerY, double dxfCenterX, double dxfCenterY, bool isFillPass) {
+    // Use semi-transparent colors for filled entities
+    final isFilledEntity = entity.type == 'HATCH' || entity.type == 'SOLID';
+    
+    // Apply color inversion if enabled
+    Color baseColor = invertColors ? _processColor(entity.color) : entity.color;
+    
+    final renderColor = (isFilledEntity && isFillPass)
+        ? baseColor.withOpacity(fillOpacity)  // Adjustable opacity for fills
+        : baseColor;
+    
+    final paint = Paint()
+      ..color = renderColor
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+
+    final data = entity.data;
+
+    if (entity.type == 'LINE') {
+      final x1 = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
+      final y1 = -(data['y'] - dxfCenterY) * totalScale + centerY + offset.dy;
+      final x2 = (data['x2'] - dxfCenterX) * totalScale + centerX + offset.dx;
+      final y2 = -(data['y2'] - dxfCenterY) * totalScale + centerY + offset.dy;
+      canvas.drawLine(Offset(x1, y1), Offset(x2, y2), paint);
+    } else if (entity.type == 'CIRCLE') {
+      final cx = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
+      final cy = -(data['y'] - dxfCenterY) * totalScale + centerY + offset.dy;
+      final r = data['radius'] * totalScale;
+      canvas.drawCircle(Offset(cx, cy), r, paint);
+    } else if (entity.type == 'ARC') {
+      final cx = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
+      final cy = -(data['y'] - dxfCenterY) * totalScale + centerY + offset.dy;
+      final r = data['radius'] * totalScale;
+      final startAngle = -data['end_angle'] * math.pi / 180;
+      final sweepAngle = -(data['start_angle'] - data['end_angle']) * math.pi / 180;
+      final rect = Rect.fromCircle(center: Offset(cx, cy), radius: r);
+      canvas.drawArc(rect, startAngle, sweepAngle, false, paint);
+    } else if (entity.type == 'LWPOLYLINE' || entity.type == 'POLYLINE') {
+      try {
+        final vertices = data['vertices'] as List<Map<String, double>>;
+        if (vertices.length < 2) return;
+
+        final path = Path();
+        final firstVertex = vertices[0];
+        final x = (firstVertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
+        final y = -(firstVertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
+        path.moveTo(x, y);
+
+        for (int i = 1; i < vertices.length; i++) {
+          final vertex = vertices[i];
+          final vx = (vertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
+          final vy = -(vertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
+          path.lineTo(vx, vy);
+        }
+
+        final flags = data['flags'] as int? ?? 0;
+        if (flags & 1 == 1) path.close();
+        canvas.drawPath(path, paint);
+      } catch (e) {
+        print('WARNING: Error rendering polyline: $e');
+      }
+    } else if ((entity.type == 'HATCH' || entity.type == 'SOLID') && isFillPass) {
+      try {
+        final vertices = data['vertices'] as List<Map<String, double>>;
+        if (vertices.isEmpty) return;
+
+        final path = Path();
+        final firstVertex = vertices[0];
+        final x = (firstVertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
+        final y = -(firstVertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
+        path.moveTo(x, y);
+
+        for (int i = 1; i < vertices.length; i++) {
+          final vertex = vertices[i];
+          final vx = (vertex['x']! - dxfCenterX) * totalScale + centerX + offset.dx;
+          final vy = -(vertex['y']! - dxfCenterY) * totalScale + centerY + offset.dy;
+          path.lineTo(vx, vy);
+        }
+
+        path.close();
+        paint.style = PaintingStyle.fill;
+        canvas.drawPath(path, paint);
+      } catch (e) {
+        print('WARNING: Error rendering ${entity.type}: $e');
+      }
+    } else if (entity.type == 'ELLIPSE') {
+      final cx = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
+      final cy = -(data['y'] - dxfCenterY) * totalScale + centerY + offset.dy;
+      final majorX = data['x2'] * totalScale;
+      final majorY = -data['y2'] * totalScale;
+      final majorRadius = math.sqrt(majorX * majorX + majorY * majorY);
+      final minorRadius = majorRadius * (data['radius'] ?? 1.0);
+      final rect = Rect.fromCenter(
+        center: Offset(cx, cy),
+        width: majorRadius * 2,
+        height: minorRadius * 2,
+      );
+      canvas.drawOval(rect, paint);
+    } else if (entity.type == 'POINT') {
+      final x = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
+      final y = -(data['y'] - dxfCenterY) * totalScale + centerY + offset.dy;
+      paint.style = PaintingStyle.fill;
+      canvas.drawCircle(Offset(x, y), 2.0, paint);
     }
   }
 
@@ -1087,7 +1315,10 @@ class DXFPainter extends CustomPainter {
   bool shouldRepaint(DXFPainter oldDelegate) {
     return oldDelegate.offset != offset ||
         oldDelegate.scale != scale ||
-        oldDelegate.dxfData != dxfData;
+        oldDelegate.dxfData != dxfData ||
+        oldDelegate.showFills != showFills ||
+        oldDelegate.fillOpacity != fillOpacity ||
+        oldDelegate.invertColors != invertColors;
   }
 }
 
@@ -1107,41 +1338,100 @@ class LayerPanel extends StatefulWidget {
 }
 
 class _LayerPanelState extends State<LayerPanel> {
+  bool _allLayersVisible = true;
+
+  void _toggleAllLayers(bool? value) {
+    if (value == null) return;
+    
+    setState(() {
+      _allLayersVisible = value;
+      // Update all layers
+      for (final layerName in widget.dxfData.layers.keys) {
+        widget.dxfData.layers[layerName]!.visible = value;
+        widget.onLayerToggle(layerName, value);
+      }
+    });
+  }
+
+  void _updateAllLayersState() {
+    // Check if all layers are visible
+    final allVisible = widget.dxfData.layers.values.every((layer) => layer.visible);
+    final anyVisible = widget.dxfData.layers.values.any((layer) => layer.visible);
+    
+    if (allVisible) {
+      _allLayersVisible = true;
+    } else if (!anyVisible) {
+      _allLayersVisible = false;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    _updateAllLayersState();
+    
     final sortedLayers = widget.dxfData.layers.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
 
-    return ListView.builder(
-      itemCount: sortedLayers.length,
-      itemBuilder: (context, index) {
-        final entry = sortedLayers[index];
-        final layerName = entry.key;
-        final layer = entry.value;
-
-        return ListTile(
-          dense: true,
-          leading: Container(
-            width: 20,
-            height: 20,
-            decoration: BoxDecoration(
-              color: layer.color,
-              border: Border.all(color: Colors.grey.shade700),
-              borderRadius: BorderRadius.circular(2),
+    return Column(
+      children: [
+        // All Layers toggle at the top
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF2b2b2b),
+            border: Border(
+              bottom: BorderSide(color: Colors.grey.shade800),
             ),
           ),
-          title: Text(
-            layerName,
-            style: const TextStyle(fontSize: 14),
+          child: CheckboxListTile(
+            dense: true,
+            title: Text(
+              'All Layers',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey.shade300,
+              ),
+            ),
+            value: _allLayersVisible,
+            onChanged: _toggleAllLayers,
+            controlAffinity: ListTileControlAffinity.trailing,
           ),
-          trailing: Checkbox(
-            value: layer.visible,
-            onChanged: (value) {
-              widget.onLayerToggle(layerName, value ?? true);
+        ),
+        // Individual layers list
+        Expanded(
+          child: ListView.builder(
+            itemCount: sortedLayers.length,
+            itemBuilder: (context, index) {
+              final entry = sortedLayers[index];
+              final layerName = entry.key;
+              final layer = entry.value;
+
+              return ListTile(
+                dense: true,
+                leading: Container(
+                  width: 20,
+                  height: 20,
+                  decoration: BoxDecoration(
+                    color: layer.color,
+                    border: Border.all(color: Colors.grey.shade700),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                title: Text(
+                  layerName,
+                  style: const TextStyle(fontSize: 14),
+                ),
+                trailing: Checkbox(
+                  value: layer.visible,
+                  onChanged: (value) {
+                    widget.onLayerToggle(layerName, value ?? true);
+                  },
+                ),
+              );
             },
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 }

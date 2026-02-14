@@ -1,4 +1,4 @@
-name: dxfvue
+name: DXFVUE 
 description: "A DXF file viewer application."
 publish_to: 'none'
 
@@ -24,6 +24,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  msix: ^3.16.13
 
 flutter_launcher_icons:
   windows:
@@ -32,3 +33,16 @@ flutter_launcher_icons:
     icon_size: 256 # Optional
 flutter:
   uses-material-design: true
+
+msix_config:
+  display_name: DXFVUE (DXF Viewer)
+  publisher_display_name: Balachandran Parthasarathy
+  identity_name: com.Eigengrey.DXFVue
+  publisher: "CN=Balachandran Parthasarathy, O=Balachandran Parthasarathy, L=Chennai, S=Tamil Nadu, C=IN"
+  msix_version: 1.0.0.0
+  logo_path: DXFVuelogo.png
+  capabilities: internetClient
+  # Add these two lines:
+  execution_alias: dxfvue
+  languages: en-us
+  file_extensions: dxf
