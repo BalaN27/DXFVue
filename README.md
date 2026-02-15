@@ -29,15 +29,19 @@ Reverse or make negative - in future
 comment debug log - done
 --------------------------------------------------------- Next version
 
-Testing check list:
-change bg color
-zoom n pan
-fit to view btn
-all layer on off
-layer on off
-reset btn
+Testing check list:  
+change bg color  
+zoom n pan  
+fit to view btn  
+all layer on off  
+layer on off  
+reset btn  
+  
 
-![App Screenshot](Screenshot.png)
+<p align="center">
+  <img src="Screenshot.png" width="600" style="background-color: transparent;">
+</p>
+<!-- ![App Screenshot](Screenshot.png) -->
 
 Regards
 Balachandran
