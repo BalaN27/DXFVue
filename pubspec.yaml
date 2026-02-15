@@ -13,27 +13,34 @@ dependencies:
   
   # File picking
   file_picker: ^8.0.0
-  
+
   # Drag and drop support
   desktop_drop: ^0.4.4
   
   # Cross-platform file handling
   cross_file: ^0.3.3
+  path_provider: ^2.1.1
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
   msix: ^3.16.13
+  flutter_launcher_icons: ^0.14.3 # <--- MAKE SURE IT IS HERE
 
 flutter_launcher_icons:
+  image_path: "DXFVuelogo.png"
+  android: "launcher_icon"
+  min_sdk_android: 21
+
   windows:
     generate: true
     image_path: "app_icon.ico" # Path to your source image
     icon_size: 256 # Optional
 flutter:
   uses-material-design: true
-
+  assets:
+    - samples/
 msix_config:
   display_name: DXFVUE (DXF Viewer)
   publisher_display_name: Balachandran Parthasarathy

@@ -1,23 +1,72 @@
 import 'dart:io';
+import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:cross_file/cross_file.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 
 
-void main(List<String> args) {
+void main(List<String> args) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Force landscape orientation on mobile/tablet devices
+  if (_isMobileOrTablet()) {
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+  }
+  
   String? initialFilePath = args.isNotEmpty ? args[0] : null;
   runApp(DXFViewerApp(initialFile: initialFilePath));
 }
 
-class DXFViewerApp extends StatelessWidget {
+// Helper function to detect mobile/tablet devices
+bool _isMobileOrTablet() {
+  if (kIsWeb) return false; // Web is not mobile
+  
+  // Check platform
+  if (Platform.isAndroid || Platform.isIOS) {
+    return true;
+  }
+  
+  return false;
+}
+
+class DXFViewerApp extends StatefulWidget {
   final String? initialFile;
   
   const DXFViewerApp({super.key, this.initialFile});
+
+  @override
+  State<DXFViewerApp> createState() => _DXFViewerAppState();
+}
+
+class _DXFViewerAppState extends State<DXFViewerApp> {
+  @override
+  void initState() {
+    super.initState();
+    // Ensure orientation stays locked
+    if (_isMobileOrTablet()) {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
+  }
+
+  @override
+  void dispose() {
+    // Reset orientation on app close (optional - uncomment if needed)
+    // SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -29,7 +78,7 @@ class DXFViewerApp extends StatelessWidget {
         primaryColor: const Color(0xFF2b2b2b),
         cardColor: const Color(0xFF2b2b2b),
       ),
-      home: DXFViewerHome(externalFile: initialFile),
+      home: DXFViewerHome(externalFile: widget.initialFile),
     );
   }
 }
@@ -51,10 +100,13 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
   double _fillOpacity = 0.3; // NEW: Adjustable fill opacity
   bool _invertColors = false; // NEW: Invert colors for visibility
   Color _backgroundColor = const Color(0xFF2b2b2b);
+  List<String> _sampleFiles = []; // Available sample files
+  bool _samplesLoaded = false;
 
   @override
   void initState() {
     super.initState();
+    _loadAvailableSamples(); // Load sample file list
     if (widget.externalFile != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _loadFile(widget.externalFile!);
@@ -69,6 +121,27 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
         title: Text(_filename ?? 'DXF Viewer'),
         backgroundColor: const Color(0xFF2b2b2b),
         actions: [
+          // Sample files dropdown (dynamic from assets)
+          if (_samplesLoaded && _sampleFiles.isNotEmpty)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.folder_special),
+              tooltip: 'Load Sample File',
+              onSelected: _loadSampleFile,
+              itemBuilder: (context) => _sampleFiles.asMap().entries.map((entry) {
+                final index = entry.key;
+                final filename = entry.value;
+                return PopupMenuItem<String>(
+                  value: filename,
+                  child: Row(
+                    children: [
+                      const Icon(Icons.description, size: 20),
+                      const SizedBox(width: 12),
+                      Text('Sample ${index + 1}'),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
           IconButton(
             icon: const Icon(Icons.folder_open),
             onPressed: _openFile,
@@ -76,162 +149,179 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
           ),
         ],
       ),
-      body: DropTarget(
-        onDragEntered: (details) {
-          setState(() => _isDragging = true);
-        },
-        onDragExited: (details) {
-          setState(() => _isDragging = false);
-        },
-        onDragDone: (details) {
-          setState(() => _isDragging = false);
-          if (details.files.isNotEmpty) {
-            final file = details.files.first;
-            if (file.path.toLowerCase().endsWith('.dxf')) {
-              _loadFile(file.path);
-            } else {
-              _showError('Please drop a .dxf file');
-            }
-          }
-        },
-        child: Row(
-          children: [
-            Expanded(
-              child: MouseRegion(
-                cursor: _isDragging ? SystemMouseCursors.copy : SystemMouseCursors.basic,
-                child: Container(
-                  color: _isDragging
-                      ? const Color(0xFF3c3c3c)
-                      : _backgroundColor,
-                  child: _dxfData == null
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.file_download_outlined,
-                                size: 64,
-                                color: Colors.grey.shade600,
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                'Drag & Drop DXF file here',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  color: Colors.grey.shade600,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                'or use the folder icon above',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.grey.shade700,
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      : DXFCanvas(
-                          dxfData: _dxfData!,
-                          backgroundColor: _backgroundColor,
-                          showFills: _showFills,
-                          fillOpacity: _fillOpacity,
-                          invertColors: _invertColors,
-                          onBackgroundColorChanged: (color) {
-                            setState(() {
-                              _backgroundColor = color;
-                              // Auto-invert if background and drawing colors are similar
-                              if (_dxfData != null) {
-                                _autoDetectColorInversion(color);
-                              }
-                            });
-                          },
-                          onShowFillsChanged: (show) {
-                            setState(() => _showFills = show);
-                          },
-                          onFillOpacityChanged: (opacity) {
-                            setState(() => _fillOpacity = opacity);
-                          },
-                          onInvertColorsChanged: (invert) {
-                            setState(() => _invertColors = invert);
-                          },
-                          onReset: _resetView,
-                        ),
-                ),
-              ),
-            ),
-            if (_dxfData != null)
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                width: _layersPanelCollapsed ? 40 : 250,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF3c3c3c),
-                  border: Border(
-                    left: BorderSide(color: Colors.grey.shade800),
-                  ),
-                ),
-                child: _layersPanelCollapsed
-                    ? Center(
-                        child: IconButton(
-                          icon: const Icon(Icons.chevron_left),
-                          onPressed: () {
-                            setState(() => _layersPanelCollapsed = false);
-                          },
-                          tooltip: 'Show Layers',
-                        ),
-                      )
-                    : Column(
+      body: _isDesktop()
+          ? DropTarget(
+              onDragEntered: (details) {
+                setState(() => _isDragging = true);
+              },
+              onDragExited: (details) {
+                setState(() => _isDragging = false);
+              },
+              onDragDone: (details) {
+                setState(() => _isDragging = false);
+                if (details.files.isNotEmpty) {
+                  final file = details.files.first;
+                  if (file.path.toLowerCase().endsWith('.dxf')) {
+                    _loadFile(file.path);
+                  } else {
+                    _showError('Please drop a .dxf file');
+                  }
+                }
+              },
+              child: _buildMainContent(),
+            )
+          : _buildMainContent(),
+    );
+  }
+
+  // Helper method to check if running on desktop
+  bool _isDesktop() {
+    if (kIsWeb) return true; // Web supports drag & drop
+    return Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+  }
+
+  Widget _buildMainContent() {
+    return Row(
+      children: [
+        Expanded(
+          child: MouseRegion(
+            cursor: _isDragging ? SystemMouseCursors.copy : SystemMouseCursors.basic,
+            child: Container(
+              color: _isDragging
+                  ? const Color(0xFF3c3c3c)
+                  : _backgroundColor,
+              child: _dxfData == null
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 12,
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    'Layers',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleLarge
-                                        ?.copyWith(
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                IconButton(
-                                  icon: const Icon(Icons.chevron_right),
-                                  onPressed: () {
-                                    setState(() => _layersPanelCollapsed = true);
-                                  },
-                                  tooltip: 'Hide Layers',
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(),
-                                  iconSize: 20,
-                                ),
-                              ],
-                            ),
+                          Icon(
+                            Icons.file_download_outlined,
+                            size: 64,
+                            color: Colors.grey.shade600,
                           ),
-                          Expanded(
-                            child: LayerPanel(
-                              dxfData: _dxfData!,
-                              onLayerToggle: (layerName, visible) {
-                                setState(() {
-                                  _dxfData!.layers[layerName]!.visible = visible;
-                                });
-                              },
+                          const SizedBox(height: 16),
+                          Text(
+                            _isDesktop() 
+                                ? 'Drag & Drop DXF file here'
+                                : 'Tap the folder icon to open a DXF file',
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: Colors.grey.shade600,
                             ),
+                            textAlign: TextAlign.center,
                           ),
+                          if (_isDesktop()) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              'or use the folder icon above',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: Colors.grey.shade700,
+                              ),
+                            ),
+                          ],
                         ],
                       ),
-              ),
-          ],
+                    )
+                  : DXFCanvas(
+                      dxfData: _dxfData!,
+                      backgroundColor: _backgroundColor,
+                      showFills: _showFills,
+                      fillOpacity: _fillOpacity,
+                      invertColors: _invertColors,
+                      onBackgroundColorChanged: (color) {
+                        setState(() {
+                          _backgroundColor = color;
+                          // Auto-invert if background and drawing colors are similar
+                          if (_dxfData != null) {
+                            _autoDetectColorInversion(color);
+                          }
+                        });
+                      },
+                      onShowFillsChanged: (show) {
+                        setState(() => _showFills = show);
+                      },
+                      onFillOpacityChanged: (opacity) {
+                        setState(() => _fillOpacity = opacity);
+                      },
+                      onInvertColorsChanged: (invert) {
+                        setState(() => _invertColors = invert);
+                      },
+                      onReset: _resetView,
+                    ),
+            ),
+          ),
         ),
-      ),
+        if (_dxfData != null)
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            width: _layersPanelCollapsed ? 40 : 250,
+            decoration: BoxDecoration(
+              color: const Color(0xFF3c3c3c),
+              border: Border(
+                left: BorderSide(color: Colors.grey.shade800),
+              ),
+            ),
+            child: _layersPanelCollapsed
+                ? Center(
+                    child: IconButton(
+                      icon: const Icon(Icons.chevron_left),
+                      onPressed: () {
+                        setState(() => _layersPanelCollapsed = false);
+                      },
+                      tooltip: 'Show Layers',
+                    ),
+                  )
+                : Column(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                'Layers',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .titleLarge
+                                    ?.copyWith(
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.chevron_right),
+                              onPressed: () {
+                                setState(() => _layersPanelCollapsed = true);
+                              },
+                              tooltip: 'Hide Layers',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              iconSize: 20,
+                            ),
+                          ],
+                        ),
+                      ),
+                      Expanded(
+                        child: LayerPanel(
+                          dxfData: _dxfData!,
+                          onLayerToggle: (layerName, visible) {
+                            setState(() {
+                              _dxfData!.layers[layerName]!.visible = visible;
+                            });
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+      ],
     );
   }
 
@@ -243,6 +333,58 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
 
     if (result != null && result.files.single.path != null) {
       _loadFile(result.files.single.path!);
+    }
+  }
+
+  // Load list of available sample files from assets
+  Future<void> _loadAvailableSamples() async {
+    try {
+      // Load the AssetManifest to discover all sample files
+      final manifestContent = await rootBundle.loadString('AssetManifest.json');
+      final Map<String, dynamic> manifestMap = json.decode(manifestContent);
+      
+      // Filter for .dxf files in the samples folder
+      final samples = manifestMap.keys
+          .where((String key) => key.startsWith('samples/') && key.endsWith('.dxf'))
+          .map((String key) => key.split('/').last) // Get filename only
+          .toList();
+      
+      setState(() {
+        _sampleFiles = samples;
+        _samplesLoaded = true;
+      });
+      
+      // print('Found ${samples.length} sample files: $samples');
+    } catch (e) {
+      // print('Error loading sample files: $e');
+      setState(() {
+        _samplesLoaded = true; // Mark as loaded even if empty
+      });
+    }
+  }
+
+  Future<void> _loadSampleFile(String sampleFileName) async {
+    try {
+      // Load the asset as bytes
+      final ByteData data = await rootBundle.load('samples/$sampleFileName');
+      
+      // Get temporary directory
+      final Directory tempDir = await getTemporaryDirectory();
+      final String tempPath = '${tempDir.path}/$sampleFileName';
+      
+      // Write bytes to temporary file
+      final File tempFile = File(tempPath);
+      await tempFile.writeAsBytes(data.buffer.asUint8List());
+      
+      // Load the temporary file
+      await _loadFile(tempPath);
+      
+      setState(() {
+        _filename = sampleFileName; // Set the display name
+      });
+    } catch (e) {
+      // print('Error loading sample file: $e');
+      _showError('Failed to load sample file: $e');
     }
   }
 
