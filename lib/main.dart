@@ -185,20 +185,23 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
                         children: [
                           Container(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
+                              horizontal: 12,
                               vertical: 12,
                             ),
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                               children: [
-                                Text(
-                                  'Layers',
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .titleLarge
-                                      ?.copyWith(
-                                        fontWeight: FontWeight.bold,
-                                      ),
+                                Expanded(
+                                  child: Text(
+                                    'Layers',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.chevron_right),
@@ -208,6 +211,7 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
                                   tooltip: 'Hide Layers',
                                   padding: EdgeInsets.zero,
                                   constraints: const BoxConstraints(),
+                                  iconSize: 20,
                                 ),
                               ],
                             ),
@@ -244,13 +248,13 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
 
   Future<void> _loadFile(String filepath) async {
     try {
-      print('Loading DXF file: $filepath');
+      // print('Loading DXF file: $filepath');
       final parser = DXFParser();
       final data = await parser.parse(filepath);
 
-      print('Parsed ${data.entities.length} entities');
-      print('Found ${data.layers.length} layers: ${data.layers.keys.toList()}');
-      print('Bounds: ${data.bounds}');
+      // print('Parsed ${data.entities.length} entities');
+      // print('Found ${data.layers.length} layers: ${data.layers.keys.toList()}');
+      // print('Bounds: ${data.bounds}');
 
       setState(() {
         _dxfData = data;
@@ -303,12 +307,12 @@ class _DXFViewerHomeState extends State<DXFViewerHome> {
       setState(() {
         _invertColors = true;
       });
-      print('AUTO-INVERT: Enabled color inversion (${similarCount}/${totalCount} entities similar to background)');
+      // print('AUTO-INVERT: Enabled color inversion (${similarCount}/${totalCount} entities similar to background)');
     } else {
       setState(() {
         _invertColors = false;
       });
-      print('AUTO-INVERT: Disabled color inversion (only ${similarCount}/${totalCount} entities similar to background)');
+      // print('AUTO-INVERT: Disabled color inversion (only ${similarCount}/${totalCount} entities similar to background)');
     }
   }
 
@@ -340,7 +344,7 @@ class DXFEntity {
 class DXFLayer {
   final String name;
   bool visible;
-  final Color color;
+  Color color; // Changed from final to allow color updates
 
   DXFLayer({
     required this.name,
@@ -363,6 +367,30 @@ class DXFData {
 
 // DXF Parser
 class DXFParser {
+  // Predefined color palette for layers
+  final List<Color> _layerColorPalette = [
+    const Color(0xFFFF0000), // Red
+    const Color(0xFF00FF00), // Green
+    const Color(0xFF0000FF), // Blue
+    const Color(0xFFFFFF00), // Yellow
+    const Color(0xFF00FFFF), // Cyan
+    const Color(0xFFFF00FF), // Magenta
+    const Color(0xFFFF8000), // Orange
+    const Color(0xFF8000FF), // Purple
+    const Color(0xFF00FF80), // Spring Green
+    const Color(0xFF0080FF), // Sky Blue
+    const Color(0xFFFF0080), // Pink
+    const Color(0xFF80FF00), // Lime
+    const Color(0xFFFFFFFF), // White
+    const Color(0xFFC0C0C0), // Light Gray
+    const Color(0xFF808080), // Gray
+    const Color(0xFF804000), // Brown
+  ];
+
+  Color _getLayerColor(int index) {
+    return _layerColorPalette[index % _layerColorPalette.length];
+  }
+
   Future<DXFData> parse(String filepath) async {
     try {
       final file = File(filepath);
@@ -370,6 +398,7 @@ class DXFParser {
 
       final entities = <DXFEntity>[];
       final layers = <String, DXFLayer>{};
+      int layerIndex = 0; // Track layer count for color assignment
 
       // Find ENTITIES section
       int entitiesStart = -1;
@@ -393,7 +422,7 @@ class DXFParser {
       int i = entitiesStart + 1;
       Map<String, dynamic>? currentEntity;
 
-      print('DEBUG: Starting entity parsing at line $i');
+      // print('DEBUG: Starting entity parsing at line $i');
 
       while (i < lines.length - 1) {
         try {
@@ -407,7 +436,7 @@ class DXFParser {
               try {
                 _addEntity(currentEntity, entities, layers);
               } catch (e) {
-                print('WARNING: Failed to add entity ${currentEntity['type']}: $e');
+                // print('WARNING: Failed to add entity ${currentEntity['type']}: $e');
               }
             }
 
@@ -422,9 +451,9 @@ class DXFParser {
                 'hatch_reading_vertices': false, // For HATCH: are we past the header?
                 'hatch_vertices_to_read': 0, // For HATCH: how many vertices to read
               };
-              if (entities.length < 5) {
-                print('DEBUG: Started parsing ${value} entity #${entities.length} at line $i');
-              }
+              // if (entities.length < 5) {
+              //   print('DEBUG: Started parsing ${value} entity #${entities.length} at line $i');
+              // }
             } else {
               currentEntity = null;
             }
@@ -438,8 +467,9 @@ class DXFParser {
                     if (!layers.containsKey(value)) {
                       layers[value] = DXFLayer(
                         name: value,
-                        color: Colors.white,
+                        color: _getLayerColor(layerIndex),
                       );
+                      layerIndex++;
                     }
                     break;
                     
@@ -455,10 +485,10 @@ class DXFParser {
                         if (verticesRead < toRead) {
                           final x = double.tryParse(value) ?? 0.0;
                           currentEntity['last_x'] = x;
-                          final hatchNum = entities.where((e) => e.type == 'HATCH').length;
-                          if (hatchNum < 3 && verticesRead < 5) {
-                            print('DEBUG HATCH #$hatchNum: Reading vertex #${verticesRead + 1}/$toRead, X=$x');
-                          }
+                          // final hatchNum = entities.where((e) => e.type == 'HATCH').length;
+                          // if (hatchNum < 3 && verticesRead < 5) {
+                          //   print('DEBUG HATCH #$hatchNum: Reading vertex #${verticesRead + 1}/$toRead, X=$x');
+                          // }
                         }
                       }
                       // Ignore 10/20 pairs before code 93
@@ -468,13 +498,13 @@ class DXFParser {
                       final x = double.tryParse(value) ?? 0.0;
                       currentEntity['last_x'] = x;
                       
-                      if (currentEntity['type'] == 'SPLINE') {
-                        final splineNum = entities.where((e) => e.type == 'SPLINE').length;
-                        final pointsRead = (currentEntity['points'] as List).length;
-                        if (splineNum < 3 && pointsRead < 5) {
-                          print('DEBUG SPLINE #$splineNum: Reading point #${pointsRead + 1}, X=$x');
-                        }
-                      }
+                      // if (currentEntity['type'] == 'SPLINE') {
+                      //   final splineNum = entities.where((e) => e.type == 'SPLINE').length;
+                      //   final pointsRead = (currentEntity['points'] as List).length;
+                      //   if (splineNum < 3 && pointsRead < 5) {
+                      //     print('DEBUG SPLINE #$splineNum: Reading point #${pointsRead + 1}, X=$x');
+                      //   }
+                      // }
                     } else {
                       currentEntity['x'] = double.tryParse(value) ?? 0.0;
                     }
@@ -495,10 +525,10 @@ class DXFParser {
                             'x': currentEntity['last_x'] as double,
                             'y': y,
                           });
-                          final hatchNum = entities.where((e) => e.type == 'HATCH').length;
-                          if (hatchNum < 3 && vertices.length <= 5) {
-                            print('DEBUG HATCH #$hatchNum: Added vertex #${vertices.length}: x=${currentEntity['last_x']}, y=$y');
-                          }
+                          // final hatchNum = entities.where((e) => e.type == 'HATCH').length;
+                          // if (hatchNum < 3 && vertices.length <= 5) {
+                          //   print('DEBUG HATCH #$hatchNum: Added vertex #${vertices.length}: x=${currentEntity['last_x']}, y=$y');
+                          // }
                           currentEntity.remove('last_x');
                         }
                       }
@@ -515,12 +545,12 @@ class DXFParser {
                           'y': y,
                         });
                         
-                        if (currentEntity['type'] == 'SPLINE') {
-                          final splineNum = entities.where((e) => e.type == 'SPLINE').length;
-                          if (splineNum < 3 && points.length <= 5) {
-                            print('DEBUG SPLINE #$splineNum: Added point #${points.length}: x=${currentEntity['last_x']}, y=$y');
-                          }
-                        }
+                        // if (currentEntity['type'] == 'SPLINE') {
+                        //   final splineNum = entities.where((e) => e.type == 'SPLINE').length;
+                        //   if (splineNum < 3 && points.length <= 5) {
+                        //     print('DEBUG SPLINE #$splineNum: Added point #${points.length}: x=${currentEntity['last_x']}, y=$y');
+                        //   }
+                        // }
                         
                         currentEntity.remove('last_x');
                       }
@@ -595,10 +625,10 @@ class DXFParser {
                       final count = int.tryParse(value) ?? 0;
                       currentEntity['hatch_vertices_to_read'] = count;
                       currentEntity['hatch_reading_vertices'] = true;
-                      final hatchNum = entities.where((e) => e.type == 'HATCH').length;
-                      if (hatchNum < 3) {
-                        print('DEBUG HATCH #$hatchNum: Code 93 says $count vertices to read (line $i)');
-                      }
+                      // final hatchNum = entities.where((e) => e.type == 'HATCH').length;
+                      // if (hatchNum < 3) {
+                      //   print('DEBUG HATCH #$hatchNum: Code 93 says $count vertices to read (line $i)');
+                      // }
                     }
                     break;
                   case 1: // Text value
@@ -609,14 +639,14 @@ class DXFParser {
                     break;
                 }
               } catch (e) {
-                print('WARNING: Failed to parse code $codeNum with value "$value": $e');
+                // print('WARNING: Failed to parse code $codeNum with value "$value": $e');
               }
             }
           }
 
           i += 2;
         } catch (e) {
-          print('WARNING: Error parsing line $i: $e');
+          // print('WARNING: Error parsing line $i: $e');
           i += 2;
         }
       }
@@ -625,50 +655,50 @@ class DXFParser {
         try {
           _addEntity(currentEntity, entities, layers);
         } catch (e) {
-          print('WARNING: Failed to add final entity: $e');
+          // print('WARNING: Failed to add final entity: $e');
         }
       }
 
       // Calculate bounds
       final bounds = _calculateBounds(entities);
 
-      print('Successfully parsed ${entities.length} entities from ${layers.length} layers');
-      print('Final bounds: $bounds');
+      // print('Successfully parsed ${entities.length} entities from ${layers.length} layers');
+      // print('Final bounds: $bounds');
       
       // Print entity type breakdown
-      final entityCounts = <String, int>{};
-      for (final entity in entities) {
-        entityCounts[entity.type] = (entityCounts[entity.type] ?? 0) + 1;
-      }
-      print('Entity breakdown: $entityCounts');
+      // final entityCounts = <String, int>{};
+      // for (final entity in entities) {
+      //   entityCounts[entity.type] = (entityCounts[entity.type] ?? 0) + 1;
+      // }
+      // print('Entity breakdown: $entityCounts');
       
       // Print layer breakdown
-      print('\n=== LAYER STATUS ===');
-      for (final layer in layers.values) {
-        final layerEntities = entities.where((e) => e.layer == layer.name).length;
-        print('Layer "${layer.name}": ${layer.visible ? "VISIBLE" : "HIDDEN"}, $layerEntities entities');
-      }
+      // print('\n=== LAYER STATUS ===');
+      // for (final layer in layers.values) {
+      //   final layerEntities = entities.where((e) => e.layer == layer.name).length;
+      //   print('Layer "${layer.name}": ${layer.visible ? "VISIBLE" : "HIDDEN"}, $layerEntities entities');
+      // }
       
       // Check if any entities have valid coordinates
-      int entitiesWithCoords = 0;
-      for (final entity in entities) {
-        if (entity.type == 'HATCH' || entity.type == 'LWPOLYLINE') {
-          final vertices = entity.data['vertices'] as List<Map<String, double>>?;
-          if (vertices != null && vertices.isNotEmpty) {
-            entitiesWithCoords++;
-            if (entitiesWithCoords == 1) {
-              print('\n=== FIRST ENTITY WITH COORDS ===');
-              print('Type: ${entity.type}');
-              print('Layer: ${entity.layer}');
-              print('Vertices: ${vertices.length}');
-              print('First vertex: ${vertices.first}');
-              print('Last vertex: ${vertices.last}');
-            }
-          }
-        }
-      }
-      print('Total entities with coordinates: $entitiesWithCoords');
-      print('==================\n');
+      // int entitiesWithCoords = 0;
+      // for (final entity in entities) {
+      //   if (entity.type == 'HATCH' || entity.type == 'LWPOLYLINE') {
+      //     final vertices = entity.data['vertices'] as List<Map<String, double>>?;
+      //     if (vertices != null && vertices.isNotEmpty) {
+      //       entitiesWithCoords++;
+      //       if (entitiesWithCoords == 1) {
+      //         print('\n=== FIRST ENTITY WITH COORDS ===');
+      //         print('Type: ${entity.type}');
+      //         print('Layer: ${entity.layer}');
+      //         print('Vertices: ${vertices.length}');
+      //         print('First vertex: ${vertices.first}');
+      //         print('Last vertex: ${vertices.last}');
+      //       }
+      //     }
+      //   }
+      // }
+      // print('Total entities with coordinates: $entitiesWithCoords');
+      // print('==================\n');
 
       return DXFData(
         entities: entities,
@@ -729,15 +759,15 @@ class DXFParser {
           data.containsKey('vertices')) {
         final vertices = data['vertices'] as List<Map<String, double>>;
         if (vertices.length >= 2) {
-          if (entities.length < 5) {  // Debug first few entities
-            print('DEBUG: Adding $type entity #${entities.length}');
-            print('  Layer: $layer');
-            print('  Vertices: ${vertices.length}');
-            if (vertices.isNotEmpty) {
-              print('  First vertex: ${vertices.first}');
-              print('  Last vertex: ${vertices.last}');
-            }
-          }
+          // if (entities.length < 5) {  // Debug first few entities
+          //   print('DEBUG: Adding $type entity #${entities.length}');
+          //   print('  Layer: $layer');
+          //   print('  Vertices: ${vertices.length}');
+          //   if (vertices.isNotEmpty) {
+          //     print('  First vertex: ${vertices.first}');
+          //     print('  Last vertex: ${vertices.last}');
+          //   }
+          // }
           entities.add(DXFEntity(
             type: type,
             layer: layer,
@@ -745,22 +775,22 @@ class DXFParser {
             data: data,
           ));
         } else {
-          if (entities.length < 5) {
-            print('WARNING: Skipping $type #${entities.length} - only ${vertices.length} vertices (need >=2)');
-          }
+          // if (entities.length < 5) {
+          //   print('WARNING: Skipping $type #${entities.length} - only ${vertices.length} vertices (need >=2)');
+          // }
         }
       } else if (type == 'SPLINE' && data.containsKey('points')) {
         final points = data['points'] as List<Map<String, double>>;
         if (points.length >= 2) {
-          if (entities.length < 5) {
-            print('DEBUG: Adding SPLINE entity #${entities.length}');
-            print('  Layer: $layer');
-            print('  Control points: ${points.length}');
-            if (points.isNotEmpty) {
-              print('  First point: ${points.first}');
-              print('  Last point: ${points.last}');
-            }
-          }
+          // if (entities.length < 5) {
+          //   print('DEBUG: Adding SPLINE entity #${entities.length}');
+          //   print('  Layer: $layer');
+          //   print('  Control points: ${points.length}');
+          //   if (points.isNotEmpty) {
+          //     print('  First point: ${points.first}');
+          //     print('  Last point: ${points.last}');
+          //   }
+          // }
           entities.add(DXFEntity(
             type: type,
             layer: layer,
@@ -768,9 +798,9 @@ class DXFParser {
             data: data,
           ));
         } else {
-          if (entities.length < 5) {
-            print('WARNING: Skipping SPLINE #${entities.length} - only ${points.length} points (need >=2)');
-          }
+          // if (entities.length < 5) {
+          //   print('WARNING: Skipping SPLINE #${entities.length} - only ${points.length} points (need >=2)');
+          // }
         }
       } else if (type == 'SOLID') {
         if (data.containsKey('x1') && data.containsKey('y1') &&
@@ -798,16 +828,16 @@ class DXFParser {
           data.containsKey('vertices')) {
         final vertices = data['vertices'] as List<Map<String, double>>;
         if (vertices.isNotEmpty) {
-          if (entities.length < 5) {  // Debug first few entities
-            print('DEBUG: Adding HATCH entity #${entities.length}');
-            print('  Layer: $layer');
-            print('  Color: $color');
-            print('  Vertices: ${vertices.length}');
-            if (vertices.isNotEmpty) {
-              print('  First vertex: ${vertices.first}');
-              print('  Last vertex: ${vertices.last}');
-            }
-          }
+          // if (entities.length < 5) {  // Debug first few entities
+          //   print('DEBUG: Adding HATCH entity #${entities.length}');
+          //   print('  Layer: $layer');
+          //   print('  Color: $color');
+          //   print('  Vertices: ${vertices.length}');
+          //   if (vertices.isNotEmpty) {
+          //     print('  First vertex: ${vertices.first}');
+          //     print('  Last vertex: ${vertices.last}');
+          //   }
+          // }
           entities.add(DXFEntity(
             type: type,
             layer: layer,
@@ -815,9 +845,9 @@ class DXFParser {
             data: data,
           ));
         } else {
-          if (entities.length < 5) {
-            print('WARNING: Skipping HATCH #${entities.length} - no vertices (vertices list empty)');
-          }
+          // if (entities.length < 5) {
+          //   print('WARNING: Skipping HATCH #${entities.length} - no vertices (vertices list empty)');
+          // }
         }
       } else if (type == 'ELLIPSE' &&
           data.containsKey('x') &&
@@ -841,8 +871,8 @@ class DXFParser {
         ));
       }
     } catch (e) {
-      print('WARNING: Failed to add entity: $e');
-      print('Entity data: $data');
+      // print('WARNING: Failed to add entity: $e');
+      // print('Entity data: $data');
     }
   }
 
@@ -863,7 +893,7 @@ class DXFParser {
 
   Rect _calculateBounds(List<DXFEntity> entities) {
     if (entities.isEmpty) {
-      print('WARNING: No entities for bounds calculation');
+      // print('WARNING: No entities for bounds calculation');
       return const Rect.fromLTRB(0, 0, 100, 100);
     }
 
@@ -935,15 +965,15 @@ class DXFParser {
           boundedCount++;
         }
       } catch (e) {
-        print('WARNING: Error calculating bounds for entity ${entity.type}: $e');
+        // print('WARNING: Error calculating bounds for entity ${entity.type}: $e');
       }
     }
     
-    print('Bounded $boundedCount/${entities.length} entities');
-    print('Raw bounds: minX=$minX, minY=$minY, maxX=$maxX, maxY=$maxY');
+    // print('Bounded $boundedCount/${entities.length} entities');
+    // print('Raw bounds: minX=$minX, minY=$minY, maxX=$maxX, maxY=$maxY');
 
     if (minX == double.infinity || maxX == double.negativeInfinity) {
-      print('ERROR: Invalid bounds, using default');
+      // print('ERROR: Invalid bounds, using default');
       return const Rect.fromLTRB(0, 0, 100, 100);
     }
 
@@ -1037,7 +1067,7 @@ class _DXFCanvasState extends State<DXFCanvas> {
       _scale = 1.0;
       _offset = Offset.zero;
       
-      print('Fit view: canvas=${size.width}x${size.height}, bounds=${dxfWidth}x${dxfHeight}');
+      // print('Fit view: canvas=${size.width}x${size.height}, bounds=${dxfWidth}x${dxfHeight}');
     });
   }
 
@@ -1233,41 +1263,42 @@ class _DXFCanvasState extends State<DXFCanvas> {
               left: 16,
               child: Row(
                 children: [
-                  Material(
-                    elevation: 4,
-                    borderRadius: BorderRadius.circular(4),
-                    color: const Color(0xFF3c3c3c),
-                    child: InkWell(
-                      onTap: () {
-                        // Force show fills for debugging
-                        widget.onShowFillsChanged(true);
-                        print('DEBUG: Forced fills ON');
-                      },
-                      borderRadius: BorderRadius.circular(4),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.bug_report, size: 18, color: Colors.orange),
-                            const SizedBox(width: 6),
-                            Text(
-                              'DEBUG',
-                              style: TextStyle(
-                                color: Colors.orange,
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
+                  // DEBUG BUTTON REMOVED FOR PRODUCTION
+                  // Material(
+                  //   elevation: 4,
+                  //   borderRadius: BorderRadius.circular(4),
+                  //   color: const Color(0xFF3c3c3c),
+                  //   child: InkWell(
+                  //     onTap: () {
+                  //       // Force show fills for debugging
+                  //       widget.onShowFillsChanged(true);
+                  //       print('DEBUG: Forced fills ON');
+                  //     },
+                  //     borderRadius: BorderRadius.circular(4),
+                  //     child: Padding(
+                  //       padding: const EdgeInsets.symmetric(
+                  //         horizontal: 12,
+                  //         vertical: 8,
+                  //       ),
+                  //       child: Row(
+                  //         mainAxisSize: MainAxisSize.min,
+                  //         children: [
+                  //           Icon(Icons.bug_report, size: 18, color: Colors.orange),
+                  //           const SizedBox(width: 6),
+                  //           Text(
+                  //             'DEBUG',
+                  //             style: TextStyle(
+                  //               color: Colors.orange,
+                  //               fontSize: 12,
+                  //               fontWeight: FontWeight.bold,
+                  //             ),
+                  //           ),
+                  //         ],
+                  //       ),
+                  //     ),
+                  //   ),
+                  // ),
+                  // const SizedBox(width: 8),
                   Material(
                     elevation: 4,
                     borderRadius: BorderRadius.circular(4),
@@ -1436,23 +1467,23 @@ class DXFPainter extends CustomPainter {
     final dxfWidth = bounds.width;
     final dxfHeight = bounds.height;
 
-    print('=== PAINT DEBUG ===');
-    print('Canvas size: ${size.width} x ${size.height}');
-    print('DXF bounds: $bounds');
-    print('DXF size: $dxfWidth x $dxfHeight');
-    print('Total entities: ${dxfData.entities.length}');
-    print('Total layers: ${dxfData.layers.length}');
+    // print('=== PAINT DEBUG ===');
+    // print('Canvas size: ${size.width} x ${size.height}');
+    // print('DXF bounds: $bounds');
+    // print('DXF size: $dxfWidth x $dxfHeight');
+    // print('Total entities: ${dxfData.entities.length}');
+    // print('Total layers: ${dxfData.layers.length}');
     
     // Count visible entities
-    int visibleCount = 0;
-    for (final entity in dxfData.entities) {
-      final layer = dxfData.layers[entity.layer];
-      if (layer != null && layer.visible) visibleCount++;
-    }
-    print('Visible entities: $visibleCount');
+    // int visibleCount = 0;
+    // for (final entity in dxfData.entities) {
+    //   final layer = dxfData.layers[entity.layer];
+    //   if (layer != null && layer.visible) visibleCount++;
+    // }
+    // print('Visible entities: $visibleCount');
 
     if (dxfWidth == 0 || dxfHeight == 0) {
-      print('ERROR: Invalid DXF dimensions, cannot render');
+      // print('ERROR: Invalid DXF dimensions, cannot render');
       // Draw error indicator
       final paint = Paint()
         ..color = Colors.red
@@ -1470,7 +1501,7 @@ class DXFPainter extends CustomPainter {
     final baseScale = math.min(scaleX, scaleY);
     final totalScale = baseScale * scale;
     
-    print('Scale: base=$baseScale, user=$scale, total=$totalScale');
+    // print('Scale: base=$baseScale, user=$scale, total=$totalScale');
 
     // Calculate center
     final centerX = size.width / 2;
@@ -1478,8 +1509,8 @@ class DXFPainter extends CustomPainter {
     final dxfCenterX = (bounds.left + bounds.right) / 2;
     final dxfCenterY = (bounds.top + bounds.bottom) / 2;
     
-    print('Centers: canvas=($centerX, $centerY), dxf=($dxfCenterX, $dxfCenterY)');
-    print('==================');
+    // print('Centers: canvas=($centerX, $centerY), dxf=($dxfCenterX, $dxfCenterY)');
+    // print('==================');
 
     // CRITICAL FIX: Render in two passes
     // Pass 1: Filled entities (background) - only if showFills is true
@@ -1489,7 +1520,7 @@ class DXFPainter extends CustomPainter {
         if (layer == null || !layer.visible) continue;
         
         if (entity.type == 'HATCH' || entity.type == 'SOLID') {
-          _renderEntity(canvas, entity, totalScale, centerX, centerY, dxfCenterX, dxfCenterY, true);
+          _renderEntity(canvas, entity, layer, totalScale, centerX, centerY, dxfCenterX, dxfCenterY, true);
         }
       }
     }
@@ -1500,18 +1531,18 @@ class DXFPainter extends CustomPainter {
       if (layer == null || !layer.visible) continue;
       
       if (entity.type != 'HATCH' && entity.type != 'SOLID') {
-        _renderEntity(canvas, entity, totalScale, centerX, centerY, dxfCenterX, dxfCenterY, false);
+        _renderEntity(canvas, entity, layer, totalScale, centerX, centerY, dxfCenterX, dxfCenterY, false);
       }
     }
   }
 
-  void _renderEntity(Canvas canvas, DXFEntity entity, double totalScale,
+  void _renderEntity(Canvas canvas, DXFEntity entity, DXFLayer layer, double totalScale,
       double centerX, double centerY, double dxfCenterX, double dxfCenterY, bool isFillPass) {
-    // Use semi-transparent colors for filled entities
+    // Use layer color if available, otherwise use entity color
     final isFilledEntity = entity.type == 'HATCH' || entity.type == 'SOLID';
     
     // Apply color inversion if enabled
-    Color baseColor = invertColors ? _processColor(entity.color) : entity.color;
+    Color baseColor = invertColors ? _processColor(layer.color) : layer.color;
     
     final renderColor = (isFilledEntity && isFillPass)
         ? baseColor.withOpacity(fillOpacity)  // Adjustable opacity for fills
@@ -1565,7 +1596,7 @@ class DXFPainter extends CustomPainter {
         if (flags & 1 == 1) path.close();
         canvas.drawPath(path, paint);
       } catch (e) {
-        print('WARNING: Error rendering polyline: $e');
+        // print('WARNING: Error rendering polyline: $e');
       }
     } else if (entity.type == 'SPLINE') {
       try {
@@ -1588,7 +1619,7 @@ class DXFPainter extends CustomPainter {
 
         canvas.drawPath(path, paint);
       } catch (e) {
-        print('WARNING: Error rendering SPLINE: $e');
+        // print('WARNING: Error rendering SPLINE: $e');
       }
     } else if ((entity.type == 'HATCH' || entity.type == 'SOLID') && isFillPass) {
       try {
@@ -1612,7 +1643,7 @@ class DXFPainter extends CustomPainter {
         paint.style = PaintingStyle.fill;
         canvas.drawPath(path, paint);
       } catch (e) {
-        print('WARNING: Error rendering ${entity.type}: $e');
+        // print('WARNING: Error rendering ${entity.type}: $e');
       }
     } else if (entity.type == 'ELLIPSE') {
       final cx = (data['x'] - dxfCenterX) * totalScale + centerX + offset.dx;
@@ -1689,6 +1720,66 @@ class _LayerPanelState extends State<LayerPanel> {
     }
   }
 
+  void _showLayerColorPicker(String layerName, DXFLayer layer) {
+    final colors = [
+      const Color(0xFFFF0000), // Red
+      const Color(0xFFFFFF00), // Yellow
+      const Color(0xFF00FF00), // Green
+      const Color(0xFF00FFFF), // Cyan
+      const Color(0xFF0000FF), // Blue
+      const Color(0xFFFF00FF), // Magenta
+      const Color(0xFFFFFFFF), // White
+      const Color(0xFF808080), // Gray
+      const Color(0xFFC0C0C0), // Light Gray
+      const Color(0xFFFF8000), // Orange
+      const Color(0xFF8000FF), // Purple
+      const Color(0xFF00FF80), // Spring Green
+      const Color(0xFF0080FF), // Sky Blue
+      const Color(0xFFFF0080), // Pink
+      const Color(0xFF80FF00), // Lime
+      const Color(0xFF000000), // Black
+    ];
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2b2b2b),
+        title: Text(
+          'Select Color for "$layerName"',
+          style: TextStyle(color: Colors.grey.shade300, fontSize: 14),
+        ),
+        content: Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: colors.map((color) {
+            return InkWell(
+              onTap: () {
+                setState(() {
+                  layer.color = color;
+                });
+                Navigator.pop(context);
+              },
+              child: Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: color,
+                  border: Border.all(
+                    color: layer.color == color
+                        ? Colors.blue
+                        : Colors.grey.shade600,
+                    width: layer.color == color ? 3 : 1,
+                  ),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     _updateAllLayersState();
@@ -1732,13 +1823,16 @@ class _LayerPanelState extends State<LayerPanel> {
 
               return ListTile(
                 dense: true,
-                leading: Container(
-                  width: 20,
-                  height: 20,
-                  decoration: BoxDecoration(
-                    color: layer.color,
-                    border: Border.all(color: Colors.grey.shade700),
-                    borderRadius: BorderRadius.circular(2),
+                leading: InkWell(
+                  onTap: () => _showLayerColorPicker(layerName, layer),
+                  child: Container(
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: layer.color,
+                      border: Border.all(color: Colors.grey.shade700),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
                   ),
                 ),
                 title: Text(
