@@ -27,6 +27,7 @@ dev_dependencies:
   flutter_lints: ^3.0.0
   msix: ^3.16.13
   flutter_launcher_icons: ^0.14.3 # <--- MAKE SURE IT IS HERE
+  inno_bundle: ^0.9.0
 
 flutter_launcher_icons:
   image_path: "DXFVuelogo.png"
@@ -53,3 +54,11 @@ msix_config:
   execution_alias: dxfvue
   languages: en-us
   file_extensions: dxf
+
+inno_bundle:
+  id: b71afbb0-1489-11f1-8a4f-756d8b4de658
+  name: "DXFVUE"
+  publisher: "Balachandran Parthasarathy"
+  executable: "DXFVUE.exe" # Name of your exe in build/windows/runner/Release
+  admin: false # Set to true if you want to require admin rights to install
+  languages: ["english"]
